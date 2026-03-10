@@ -37,6 +37,30 @@ fi
 
 cd "$TE_DIR"
 
+# Kill any existing process on TE port (default 3010)
+TE_PORT="${PORT:-3010}"
+kill_port() {
+  local pids
+  if [[ "$OSTYPE" == msys* || "$OSTYPE" == cygwin* || "$OSTYPE" == win* ]]; then
+    # Windows: use netstat + taskkill
+    pids=$(netstat -ano 2>/dev/null | grep ":${TE_PORT} " | grep 'LISTENING' | awk '{print $5}' | sort -u || true)
+    for pid in $pids; do
+      if [ -n "$pid" ] && [ "$pid" != "0" ]; then
+        warn "Killing PID $pid on port $TE_PORT..."
+        taskkill //F //PID "$pid" 2>/dev/null || true
+      fi
+    done
+  else
+    # Unix: use lsof
+    pids=$(lsof -ti ":${TE_PORT}" 2>/dev/null || true)
+    for pid in $pids; do
+      warn "Killing PID $pid on port $TE_PORT..."
+      kill -9 "$pid" 2>/dev/null || true
+    done
+  fi
+}
+kill_port
+
 if [ "${1:-}" = "--once" ]; then
   log "Starting Trading Engine (single run)..."
   log "Port: 3010 | Engine ID: ${ENGINE_ID:-te-dev-001}"
