@@ -18,10 +18,10 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log()  { echo -e "${CYAN}[dev-te]${NC} $*"; }
-ok()   { echo -e "${GREEN}[dev-te]${NC} $*"; }
-warn() { echo -e "${YELLOW}[dev-te]${NC} $*"; }
-err()  { echo -e "${RED}[dev-te]${NC} $*" >&2; }
+log()  { printf "${CYAN}[dev-te]${NC} %s\n" "$*"; }
+ok()   { printf "${GREEN}[dev-te]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[dev-te]${NC} %s\n" "$*"; }
+err()  { printf "${RED}[dev-te]${NC} %s\n" "$*" >&2; }
 
 # Source env vars
 ENV_HOST="$ROOT_DIR/packages/docker/dev/.env.host"

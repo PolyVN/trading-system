@@ -25,10 +25,10 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
-log()  { echo -e "${CYAN}[dev-db]${NC} $*"; }
-ok()   { echo -e "${GREEN}[dev-db]${NC} $*"; }
-warn() { echo -e "${YELLOW}[dev-db]${NC} $*"; }
-err()  { echo -e "${RED}[dev-db]${NC} $*" >&2; }
+log()  { printf "${CYAN}[dev-db]${NC} %s\n" "$*"; }
+ok()   { printf "${GREEN}[dev-db]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[dev-db]${NC} %s\n" "$*"; }
+err()  { printf "${RED}[dev-db]${NC} %s\n" "$*" >&2; }
 
 cmd_up() {
   log "Starting MongoDB + Redis..."
@@ -66,8 +66,8 @@ cmd_up() {
 
   echo ""
   ok "Databases ready!"
-  echo -e "  MongoDB: ${CYAN}mongodb://localhost:27017${NC}"
-  echo -e "  Redis:   ${CYAN}redis://localhost:6379${NC}"
+  printf "  MongoDB: ${CYAN}mongodb://localhost:27017${NC}\n"
+  printf "  Redis:   ${CYAN}redis://localhost:6379${NC}\n"
 }
 
 cmd_down() {

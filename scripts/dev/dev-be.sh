@@ -14,9 +14,9 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-log() { echo -e "${CYAN}[dev-be]${NC} $*"; }
-ok()  { echo -e "${GREEN}[dev-be]${NC} $*"; }
-err() { echo -e "${RED}[dev-be]${NC} $*" >&2; }
+log() { printf "${CYAN}[dev-be]${NC} %s\n" "$*"; }
+ok()  { printf "${GREEN}[dev-be]${NC} %s\n" "$*"; }
+err() { printf "${RED}[dev-be]${NC} %s\n" "$*" >&2; }
 
 cd "$BE_DIR"
 

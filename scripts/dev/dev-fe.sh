@@ -14,9 +14,9 @@ GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-log() { echo -e "${CYAN}[dev-fe]${NC} $*"; }
-ok()  { echo -e "${GREEN}[dev-fe]${NC} $*"; }
-err() { echo -e "${RED}[dev-fe]${NC} $*" >&2; }
+log() { printf "${CYAN}[dev-fe]${NC} %s\n" "$*"; }
+ok()  { printf "${GREEN}[dev-fe]${NC} %s\n" "$*"; }
+err() { printf "${RED}[dev-fe]${NC} %s\n" "$*" >&2; }
 
 cd "$FE_DIR"
 

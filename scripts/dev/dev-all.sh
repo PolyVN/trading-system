@@ -21,10 +21,10 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-log()  { echo -e "${CYAN}[dev-all]${NC} $*"; }
-ok()   { echo -e "${GREEN}[dev-all]${NC} $*"; }
-warn() { echo -e "${YELLOW}[dev-all]${NC} $*"; }
-err()  { echo -e "${RED}[dev-all]${NC} $*" >&2; }
+log()  { printf "${CYAN}[dev-all]${NC} %s\n" "$*"; }
+ok()   { printf "${GREEN}[dev-all]${NC} %s\n" "$*"; }
+warn() { printf "${YELLOW}[dev-all]${NC} %s\n" "$*"; }
+err()  { printf "${RED}[dev-all]${NC} %s\n" "$*" >&2; }
 
 # Parse flags
 RUN_TE=true
@@ -99,16 +99,16 @@ if [ "$RUN_FE" = true ]; then
 fi
 
 echo ""
-echo -e "${BOLD}========================================${NC}"
+printf "${BOLD}========================================${NC}\n"
 ok "Dev environment running!"
-echo -e "${BOLD}========================================${NC}"
-echo -e "  MongoDB:         ${CYAN}mongodb://localhost:27017${NC}"
-echo -e "  Redis:           ${CYAN}redis://localhost:6379${NC}"
-[ "$RUN_FE" = true ] && echo -e "  CMS Frontend:    ${CYAN}http://localhost:3000${NC}"
-[ "$RUN_BE" = true ] && echo -e "  CMS Backend:     ${CYAN}http://localhost:3001${NC}"
-[ "$RUN_TE" = true ] && echo -e "  Trading Engine:  ${CYAN}http://localhost:3010${NC}"
-echo -e "${BOLD}========================================${NC}"
-echo -e "  Press ${YELLOW}Ctrl+C${NC} to stop all services"
+printf "${BOLD}========================================${NC}\n"
+printf "  MongoDB:         ${CYAN}mongodb://localhost:27017${NC}\n"
+printf "  Redis:           ${CYAN}redis://localhost:6379${NC}\n"
+[ "$RUN_FE" = true ] && printf "  CMS Frontend:    ${CYAN}http://localhost:3000${NC}\n"
+[ "$RUN_BE" = true ] && printf "  CMS Backend:     ${CYAN}http://localhost:3001${NC}\n"
+[ "$RUN_TE" = true ] && printf "  Trading Engine:  ${CYAN}http://localhost:3010${NC}\n"
+printf "${BOLD}========================================${NC}\n"
+printf "  Press ${YELLOW}Ctrl+C${NC} to stop all services\n"
 echo ""
 
 # Wait for all child processes
