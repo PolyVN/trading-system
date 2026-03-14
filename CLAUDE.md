@@ -29,10 +29,10 @@ CMS Frontend (Next.js 16)           ─┘
 
 **Exchange Abstraction Layer**: Core traits decouple trading logic from exchange specifics:
 - `OrderExecutor` trait - place/cancel/amend orders
-- `FeedProvider` trait - market data feeds (orderbook, ticker, trades, klines)
+- `FeedProvider` trait - market data feeds (orderbook, ticker, trades, klines) + `retire()` for delayed unsubscribe
 - `WalletAdapter` trait - credential management, balance queries
 - `PositionAdapter` trait - position tracking (binary shares vs leveraged contracts)
-- `ExchangeAdapter` - composite struct combining all above (trait objects)
+- `ExchangeAdapter` - composite struct combining all above + optional `user_ws` (Polymarket live) + `resolution_rx` (market resolution broadcast)
 
 **ExchangeRegistry**: Factory singleton that registers `ExchangeAdapterFactory` per exchange at startup. BotRunner creates per-bot adapter via `ExchangeRegistry::create_adapter(&bot_config)`.
 
@@ -42,9 +42,22 @@ CMS Frontend (Next.js 16)           ─┘
 | Auth | Proxy wallet + PK → CLOB creds | API Key + Secret + Passphrase |
 | Currency | USDC only | Multi-currency (USDT, USDC, BTC...) |
 | Leverage | No | 1x-125x |
-| Resolution | Yes (UMA oracle, 48–72h dispute) | No (continuous), but futures expire |
+| Resolution | Yes (UMA oracle, 48–72h dispute; BTC Up/Down auto-resolves via Chainlink) | No (continuous), but futures expire |
 | Jurisdiction | Global | Global |
 | Order types | Limit, Market | Limit, Market, Stop, Trailing, TP/SL, Iceberg, TWAP |
+| Min order | Per-market **shares** from Gamma API `orderMinSize` (not USD — cost = shares × price) | Varies by instrument |
+| Lot size | 1 (integer shares only) | Varies by instrument |
+
+## Polymarket WebSocket Channels
+
+| Channel | URL | Auth | Purpose |
+|---------|-----|------|---------|
+| **Market** | `wss://ws-subscriptions-clob.polymarket.com/ws/market` | No | Orderbook snapshots, price_change, last_trade_price, tick_size_change, **market_resolved** (with `custom_feature_enabled: true`) |
+| **User** | `wss://ws-subscriptions-clob.polymarket.com/ws/user` | Yes (API key/secret/passphrase in subscribe msg) | Order lifecycle (placed, partial fill, cancelled), trade events. **Live mode only** — reduces REST polling from ~4 req/s/bot to ~0.03 req/s |
+| **Sports** | `wss://sports-api.polymarket.com/ws` | No | Live game scores, periods, match status (`sport_result` events). Auto-broadcasts, no subscribe needed. Ping/pong heartbeat 5s |
+| **RTDS** | `wss://ws-live-data.polymarket.com` | No | Crypto prices (Binance relay + Chainlink). Topics: `crypto_prices`, `crypto_prices_chainlink`. Ping every 5s |
+
+**Retire pattern**: On market rotation, old market feeds are "retired" (stop orderbook processing, keep WS subscription alive) to receive `market_resolved` event for settlement verification. Auto-unsubscribe after 2 hours if no resolution received.
 
 ## Communication Flow
 
@@ -53,6 +66,7 @@ CMS Frontend (Next.js 16)           ─┘
 - **CMS Backend → CMS Frontend**: Socket.IO WebSocket + REST API
 - **Persistence**: Only CMS Backend writes to MongoDB (via BullMQ workers). Trading Engine never touches DB directly. Rust TE enqueues jobs by replicating BullMQ's internal protocol via Lua script: `INCR` job ID → `HSET bull:{queueName}:{jobId}` (job data) → `LPUSH bull:{queueName}:wait` (FIFO enqueue) → `PUBLISH` (notify workers). CMS Backend BullMQ workers consume normally.
 - **All payloads** include `engineId`, `exchange`, and `timestamp` (Unix epoch **milliseconds**). JSON serialized via `serde_json` on Rust side, parsed natively on Node.js side.
+- **BullMQ queues**: `orders`, `trades`, `notifications`, `pnl`, `audit`, `paper-balance`, `market-observations`, `fill-analytics`. High-frequency queues (`market-observations`, `paper-balance`) use aggressive cleanup (`removeOnComplete: { count: 50, age: 60 }`).
 
 ## Key Architectural Patterns
 
@@ -60,15 +74,44 @@ CMS Frontend (Next.js 16)           ─┘
 
 **Event-driven trading engine**: Single process async (tokio runtime), each bot is a BotRunner instance with its own `CancellationToken`. Hybrid tick model: event-driven (`on_feed_update`) for fast reaction + periodic (`on_tick`) for maintenance. Uses `tokio::select!` for multiplexing feeds and cancellation.
 
-**Shared data feeds (FeedManager)**: Singleton with `Arc` reference counting. Feed key format: `{exchange}:{feedType}:{params}`. Multiple bots on same feed share 1 WebSocket connection via `tokio-tungstenite`.
+**Shared data feeds (FeedManager)**: Singleton with `Arc` reference counting. Feed key format: `{exchange}:{feedType}:{params}`. Multiple bots on same feed share 1 WebSocket connection via `tokio-tungstenite`. Two paths: hot (native exchange orderbook via SharedFeed + RwLock) and warm (external feeds via FeedPlugin + broadcast channels).
 
-**Strategy system**: `Strategy` trait with `supported_exchanges() -> Vec<Exchange>`. Builtin strategies: Market Making, Signal-based, Arbitrage (cross-exchange), Grid Trading (OKX), Funding Rate Arb (OKX), DCA (OKX). Strategies are compiled into the engine binary; no hot-reload (recompile + restart for strategy changes).
+**Strategy system**: `Strategy` trait with `supported_exchanges() -> Vec<Exchange>`. Strategies are compiled into the engine binary; no hot-reload (recompile + restart for strategy changes).
+
+Builtin strategies (10):
+
+| Strategy | Exchanges | Description |
+|----------|-----------|-------------|
+| `market-making` | Both | Quotes bid/ask, dynamic spread, inventory skew, dual-book (YES+NO) |
+| `signal-based` | Both | Consumes external signal feed with confidence threshold |
+| `arbitrage` | Both | Cross-exchange arbitrage |
+| `grid-trading` | OKX only | Grid orders |
+| `funding-rate-arb` | OKX only | Funding rate arbitrage |
+| `dca` | OKX only | Dollar-cost averaging |
+| `oracle-arb` | Both | Probit (normal CDF) pricing model for BTC Up/Down markets, arb vs Binance/Chainlink |
+| `momentum-scalper` | Both | Trend-following scalper with hedging, TP/SL/trailing stop, max hold time |
+| `mean-reversion` | Both | Fade-the-deviation, market timing via `_market_end_epoch`, skip entries late in market |
+| `market-observer` | Polymarket | Passive data collection (no orders), publishes `MarketObservationEvent` every N ticks |
+| `data-collector` | Polymarket | Places small limit orders to measure fill behavior (rate, latency, adverse selection) |
 
 **Multi-engine horizontal scaling**: Each TE instance has unique `engine_id` + `supported_exchanges`. Engines can specialize per exchange or handle multiple.
 
-**Paper trading**: PaperExecutor wraps any exchange's `OrderExecutor` trait. Per-exchange simulation: Polymarket (binary fills), OKX spot (ticker-based), OKX perpetual (funding + liquidation simulation).
+**Paper trading**: PaperExecutor wraps any exchange's `OrderExecutor` trait. Per-exchange simulation: Polymarket (binary fills), OKX spot (ticker-based), OKX perpetual (funding + liquidation simulation). Polymarket paper executor includes:
+- **Latency simulation**: Orders skip immediate fill, queue for next tick (simulates 100-500ms CLOB round-trip)
+- **Constraint validation**: Checks tick size, min order size, lot size against real Polymarket CLOB rejection rules
+- **Self-trade prevention**: Blocks orders that cross own complement-token positions
+- **Auto-flatten**: Safety net at 95% of market window — cancel orders + close positions via IOC merge orders
+- **Settlement on rotation**: When market rotates, `check_and_rotate()` settles paper positions using BTC price inference (Chainlink/Binance feed priority, market-price heuristic fallback)
+
+**Settlement verification**: Two-phase approach:
+1. Infer outcome at rotation time (BTC price vs strike from cached feeds)
+2. Queue for verification: WS `market_resolved` event (realtime, zero API calls) → Gamma API polling (every 5 min, fallback) → log MISMATCH if inferred ≠ actual
 
 **Risk management**: Per-bot + optional cross-exchange aggregation. Universal limits (max_daily_loss, max_drawdown) + exchange-specific (max_leverage, liquidation_buffer for OKX). Currency normalization to USDC equivalent for cross-exchange risk.
+
+**MoneyManager**: Dynamic position sizing with % balance + Kelly criterion. Configurable: `baseRiskPct` (default 5%), `maxPositionPct` (30%), `maxDailyLossPct` (10%), `maxDrawdownPct` (20%), `kellyFraction` (half-Kelly default), `minOrderSize`, `maxOrderSize`. Injected into `StrategyContext.suggested_order_size`.
+
+**REST/WS hybrid polling**: When User WS connected, bot_runner reads from cached WS state (zero REST calls). Every 30 ticks (~30s), REST reconciliation compares WS vs API state — compare-and-warn only, never overwrite WS state. Force sync after 2 consecutive mismatches.
 
 ## Important Conventions
 
@@ -84,6 +127,7 @@ CMS Frontend (Next.js 16)           ─┘
 - RBAC roles: admin (full), operator (manage bots/orders, exchange-scoped), viewer (read-only)
 - CMS is exchange-agnostic: stores/relays data for all exchanges without exchange-specific business logic
 - Currency normalization: all cross-exchange risk/PnL converted to USDC equivalent
+- Order sizes are in **shares** not USD (Polymarket). Cost = shares × price. Min order per market from Gamma API `orderMinSize`
 
 ## Documentation
 
@@ -102,8 +146,9 @@ Full architecture docs are in `docs/` organized by domain:
 
 | Service | Stack |
 |---------|-------|
-| Trading Engine | **Rust 2024 edition** (MSRV 1.85): tokio 1.49, serde 1.0, reqwest 0.13, redis 1.0 + deadpool-redis 0.23, tokio-tungstenite 0.28, tracing 0.1 + tracing-subscriber 0.3, prometheus-client 0.24, aes-gcm 0.10, rust_decimal 1.40, axum 0.8, chrono 0.4, anyhow 1.0, thiserror 2.0, polymarket-client-sdk |
+| Trading Engine | **Rust 2024 edition** (MSRV 1.85): tokio 1.49, serde 1.0, reqwest 0.13, redis 1.0 + deadpool-redis 0.23, tokio-tungstenite 0.28, tracing 0.1 + tracing-subscriber 0.3, prometheus-client 0.24, aes-gcm 0.10, rust_decimal 1.40, axum 0.8, chrono 0.4, anyhow 1.0, thiserror 2.0, dashmap, polymarket-client-sdk |
 | Shared Types | **JSON Schema** (source of truth) → codegen to TypeScript (`json-schema-to-typescript 15.0`) + Rust (`typify 0.6`) |
 | CMS Backend | **Node.js 22 LTS** / TypeScript 5.9: Fastify 5.7, Mongoose 9.2, Socket.IO 4.8, BullMQ 5.70, ioredis 5.9, Zod 4.3, Pino 10.3, prom-client 15.1, decimal.js 10.6, NextAuth-compatible JWT |
 | CMS Frontend | **Next.js 16** / React 19.2: shadcn/ui (latest), Tailwind CSS 4.2, TanStack Query 5.90, TanStack Table 8.21, Recharts 3.7, Socket.IO Client 4.8, NextAuth.js 4.24, react-hook-form 7.71, nuqs 2.8, sonner 2.0 |
-| Infrastructure | Docker Compose v2, Redis 7.4, MongoDB 8.0, Prometheus 3.x, Grafana 11.x, Caddy 2.9 |
+| Infrastructure | Docker Compose v2, Redis 7.4 (512MB maxmemory), MongoDB 8.0, Prometheus 3.x, Grafana 11.x, Caddy 2.9 |
+| Dev Ports | CMS Frontend: **6000**, CMS Backend: **6001**, Trading Engine: **6010** |
