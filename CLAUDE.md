@@ -48,6 +48,31 @@ CMS Frontend (Next.js 16)           ─┘
 | Min order | Per-market **shares** from Gamma API `orderMinSize` (not USD — cost = shares × price) | Varies by instrument |
 | Lot size | 1 (integer shares only) | Varies by instrument |
 
+## BTC Up/Down Token Price Relationship
+
+**Critical — avoid confusion in strategy logic:**
+
+For BTC Up/Down markets: YES = UP token, NO = DOWN token.
+
+| BTC Price | YES (UP) Price | NO (DOWN) Price | Effect |
+|-----------|---------------|-----------------|--------|
+| BTC pumps | → $1.00 | → $0.00 | BUY YES to profit |
+| BTC dumps | → $0.00 | → $1.00 | BUY NO to profit |
+| BTC sideways | ~ $0.50 | ~ $0.50 | Spread capture possible |
+
+**Order implications (buy-only model):**
+- BUY YES = bullish bet (profit if BTC ≥ strike at resolution)
+- BUY NO = bearish bet = equivalent to "short YES" (profit if BTC < strike)
+- Limit BUY YES @$0.48: fills when YES price **drops to** $0.48 (BTC dipping)
+- Limit BUY NO @$0.48: fills when NO price **drops to** $0.48 (BTC pumping)
+
+**Market-making risk:** Quoting both sides (BUY YES @$0.48 + BUY NO @$0.48):
+- If BTC trends one direction → only one side fills → **directional exposure**
+- If BTC sideways → both fill → merge YES+NO = $1.00 for $0.96 cost → **profit from spread**
+- Resolution: unfilled side = no risk, filled side = binary bet ($0 or $1)
+
+**Verified:** All 7 strategy files + settlement logic correctly implement this relationship (audited 2026-03-15).
+
 ## Polymarket WebSocket Channels
 
 | Channel | URL | Auth | Purpose |
